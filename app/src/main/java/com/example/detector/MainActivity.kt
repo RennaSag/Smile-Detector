@@ -2,7 +2,7 @@ package com.example.detector
 
 import android.Manifest
 import android.content.pm.PackageManager
-//import android.hardware.camera2.params.Face
+import android.media.MediaPlayer
 import android.os.Bundle
 import android.util.Log
 import android.widget.TextView
@@ -31,6 +31,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var smileStatusTextView: TextView
     private val TAG = "SmileDetector"
 
+    // players de media para as musiquinhas
+    private lateinit var happyMediaPlayer: MediaPlayer
+    private lateinit var sadMediaPlayer: MediaPlayer
+
+    // variavel pra controlar o estado atual do rosto, sorrindo/não-sorrindo
+    private var isCurrentlySmiling = false
+
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
@@ -47,14 +54,17 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        // Inicialização de Views
+        // inicialização dos Views
         previewView = findViewById(R.id.previewView)
         smileStatusTextView = findViewById(R.id.smileStatusTextView)
 
-        // Executor para tarefas da câmera
+        // inicializar os mediaplayers
+        setupMediaPlayers()
+
+        // executor para tarefas da câmera
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        // Verificação de permissões
+        // eerificação de permissões
         if (allPermissionsGranted()) {
             startCamera()
         } else {
@@ -62,6 +72,16 @@ class MainActivity : AppCompatActivity() {
                 this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS
             )
         }
+    }
+
+    private fun setupMediaPlayers() {
+        // inicializa o mediaplayer para som alegre
+        happyMediaPlayer = MediaPlayer.create(this, R.raw.alegria)
+        happyMediaPlayer.isLooping = true  // o som toca enquanto estiver sorrindo
+
+        // Inicializa o MediaPlayer para som triste
+        sadMediaPlayer = MediaPlayer.create(this, R.raw.triste)
+        sadMediaPlayer.isLooping = true  // som toca enquanto não estiver sorrindo
     }
 
     private fun allPermissionsGranted() = REQUIRED_PERMISSIONS.all {
@@ -78,7 +98,7 @@ class MainActivity : AppCompatActivity() {
             if (allPermissionsGranted()) {
                 startCamera()
             } else {
-                smileStatusTextView.text = "Permissões não concedidas, câmera não encontrada"
+                smileStatusTextView.text = "Permissões não concedidas"
             }
         }
     }
@@ -89,14 +109,14 @@ class MainActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
-            // Preview
+            // preview
             val preview = Preview.Builder()
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
                 }
 
-            // Configuração do detector de face
+            // configuração do detector de face
             val highAccuracyOpts = FaceDetectorOptions.Builder()
                 .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_ACCURATE)
                 .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
@@ -105,7 +125,7 @@ class MainActivity : AppCompatActivity() {
 
             val detector = FaceDetection.getClient(highAccuracyOpts)
 
-            // Análise de imagem
+            // análise da imagem da camera
             val imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
@@ -125,7 +145,7 @@ class MainActivity : AppCompatActivity() {
                                         processSmiles(faces)
                                     }
                                     .addOnFailureListener { e ->
-                                        Log.e(TAG, "Falha na detecção de faces: $e")
+                                        Log.e(TAG, "Falha na detecção de rostos: $e")
                                     }
                                     .addOnCompleteListener {
                                         imageProxy.close()
@@ -137,14 +157,14 @@ class MainActivity : AppCompatActivity() {
                     })
                 }
 
-            // Selector de câmera frontal
+            // selector utiliza a câmera fontal
             val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
             try {
-                // Reinicia vinculação
+                // reinicia vinculação
                 cameraProvider.unbindAll()
 
-                // Vincula casos de uso à câmera
+                // vincula casos de uso à câmera
                 cameraProvider.bindToLifecycle(
                     this, cameraSelector, preview, imageAnalyzer
                 )
@@ -160,6 +180,11 @@ class MainActivity : AppCompatActivity() {
         if (faces.isEmpty()) {
             runOnUiThread {
                 smileStatusTextView.text = "Nenhum rosto encontrado"
+
+                // se não houver rostos, ele considera que não está sorrindo
+                //playSadSound()
+                //tirei a chamada da função acima pra musiquinha triste só tocar quando
+                //o rosto de fato estiver triste
             }
             return
         }
@@ -173,15 +198,80 @@ class MainActivity : AppCompatActivity() {
 
         runOnUiThread {
             when {
-                smilingPeople == 0 -> smileStatusTextView.text = "Ninguém está sorrindo 😐"
-                smilingPeople == faces.size -> smileStatusTextView.text = "Todos estão sorrindo! 😃"
-                else -> smileStatusTextView.text = "$smilingPeople/${faces.size} pessoas sorrindo 😊"
+                smilingPeople == 0 -> {
+                    smileStatusTextView.text = "Ninguém ta sorrindo  ;-;" //😐
+                    playSadSound()
+                }
+                smilingPeople == faces.size -> {
+                    smileStatusTextView.text = "Todo mundo está sorrindo :D " //😃
+                    playHappySound()
+                }
+                else -> {
+                    smileStatusTextView.text = "$smilingPeople/${faces.size} pessoas sorrindo :D" //😊
+                    playHappySound() // toca o som alegre quanto tiver alguem sorrindo
+                }
             }
+        }
+    }
+
+    private fun playHappySound() {
+        if (!isCurrentlySmiling) {
+            // para o som triste se ele estiver tocando estiver tocando
+            if (sadMediaPlayer.isPlaying) {
+                sadMediaPlayer.pause()
+            }
+
+            // inicia o som alegre
+            if (!happyMediaPlayer.isPlaying) {
+                happyMediaPlayer.start()
+            }
+
+            isCurrentlySmiling = true
+        }
+    }
+
+    private fun playSadSound() {
+        if (isCurrentlySmiling) {
+            // para o som alegre se quando estiver tocando
+            if (happyMediaPlayer.isPlaying) {
+                happyMediaPlayer.pause()
+            }
+
+            // inicia o som triste
+            if (!sadMediaPlayer.isPlaying) {
+                sadMediaPlayer.start()
+            }
+
+            isCurrentlySmiling = false
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // pausa as musicas quando o aplicativo estiver em segundo plano
+        if (happyMediaPlayer.isPlaying) {
+            happyMediaPlayer.pause()
+        }
+        if (sadMediaPlayer.isPlaying) {
+            sadMediaPlayer.pause()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // volta com o som quando o aplicativo for reaberto, de acordo com sorriso/não-sorriso
+        if (isCurrentlySmiling) {
+            happyMediaPlayer.start()
+        } else {
+            sadMediaPlayer.start()
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        // libera recursos quando o aplicativo terminar
         cameraExecutor.shutdown()
+        happyMediaPlayer.release()
+        sadMediaPlayer.release()
     }
 }
