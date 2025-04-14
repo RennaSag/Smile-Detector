@@ -4,7 +4,9 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.util.DisplayMetrics
 import android.util.Log
+import android.util.Size
 import android.widget.TextView
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AppCompatActivity
@@ -12,6 +14,7 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.UseCaseGroup
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
@@ -24,6 +27,9 @@ import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 class MainActivity : AppCompatActivity() {
     private lateinit var cameraExecutor: ExecutorService
@@ -41,6 +47,10 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 10
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
+
+        // resolução padrão para otimização
+        private const val RATIO_4_3_VALUE = 4.0 / 3.0
+        private const val RATIO_16_9_VALUE = 16.0 / 9.0
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -58,10 +68,10 @@ class MainActivity : AppCompatActivity() {
         previewView = findViewById(R.id.previewView)
         smileStatusTextView = findViewById(R.id.smileStatusTextView)
 
-        // iinicializar os MediaPlayers
+        // inicializar os MediaPlayers
         setupMediaPlayers()
 
-        // Executor para tarefas da câmera
+        // executor para tarefas da câmera
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         // verificação de permissões
@@ -109,8 +119,19 @@ class MainActivity : AppCompatActivity() {
         cameraProviderFuture.addListener({
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
-            // Preview
+            // Determinar a melhor resolução baseada no dispositivo
+            val metrics = DisplayMetrics().also { previewView.display?.getRealMetrics(it) }
+            val screenAspectRatio = aspectRatio(metrics.widthPixels, metrics.heightPixels)
+            val rotation = previewView.display?.rotation ?: 0
+
+            // Calcular a resolução ideal para o dispositivo
+            val resolution = getOptimalResolution(metrics)
+            Log.d(TAG, "Resolução otimizada: ${resolution.width} x ${resolution.height}")
+
+            // Preview com resolução adaptada
             val preview = Preview.Builder()
+                .setTargetResolution(resolution)
+                .setTargetRotation(rotation)
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
@@ -125,8 +146,10 @@ class MainActivity : AppCompatActivity() {
 
             val detector = FaceDetection.getClient(highAccuracyOpts)
 
-            // análise de imagem
+            // análise de imagem com resolução adaptada
             val imageAnalyzer = ImageAnalysis.Builder()
+                .setTargetResolution(resolution)
+                .setTargetRotation(rotation)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
@@ -164,9 +187,15 @@ class MainActivity : AppCompatActivity() {
                 // reinicia vinculação
                 cameraProvider.unbindAll()
 
+                // Agrupar casos de uso para uma melhor sincronização
+                val useCaseGroup = UseCaseGroup.Builder()
+                    .addUseCase(preview)
+                    .addUseCase(imageAnalyzer)
+                    .build()
+
                 // vincula os casos de uso à câmera
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageAnalyzer
+                    this, cameraSelector, useCaseGroup
                 )
 
             } catch (exc: Exception) {
@@ -174,6 +203,27 @@ class MainActivity : AppCompatActivity() {
             }
 
         }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun getOptimalResolution(metrics: DisplayMetrics): Size {
+        // Limitar a resolução para equilibrar performance e qualidade
+        val screenSize = Size(metrics.widthPixels, metrics.heightPixels)
+        val maxResolution = 1080 // resolução máxima para análise (pode ser ajustada)
+
+        // Calcular resolução proporcional, mas limitada para não sobrecarregar
+        val width = min(screenSize.width, maxResolution)
+        val height = min(screenSize.height, maxResolution)
+
+        // Manter proporção da tela, mas não exceder resolução máxima
+        return Size(width, height)
+    }
+
+    private fun aspectRatio(width: Int, height: Int): Int {
+        val previewRatio = max(width, height).toDouble() / min(width, height).toDouble()
+        if (abs(previewRatio - RATIO_4_3_VALUE) <= abs(previewRatio - RATIO_16_9_VALUE)) {
+            return androidx.camera.core.AspectRatio.RATIO_4_3
+        }
+        return androidx.camera.core.AspectRatio.RATIO_16_9
     }
 
     private fun processSmiles(faces: List<Face>) {
